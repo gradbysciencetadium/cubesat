@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cubesat-sim"
+version = "0.1.0"
+description = "End-to-end instrument simulator for the UCL CubeSat double-Fourier interferometer"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.setuptools]
+packages = ["cubesat_sim"]

@@ -1,0 +1,932 @@
+\documentclass[11pt]{article}
+
+% ======================================================================
+%  Documentation for cubesat_sim - the CubeSat double-Fourier
+%  interferometer instrument simulator. Explains the code structure,
+%  every module's job, the physics each one implements, the design
+%  decisions, and the open questions the build surfaced.
+%  Paste into Overleaf and compile with pdfLaTeX.
+% ======================================================================
+
+\usepackage[a4paper,margin=1in,headsep=14pt]{geometry}
+
+% ---- type ----------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage{mathtools}
+\usepackage{libertine}
+\usepackage{libertinust1math}
+\usepackage{microtype}
+
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+
+% ---- palette (matches the working-notes theme) ----------------------------
+\definecolor{plumdark}{HTML}{482661}
+\definecolor{plummid}{HTML}{7A4FB0}
+\definecolor{plumaccent}{HTML}{963A8A}
+\definecolor{plumrule}{HTML}{D6C9EC}
+\definecolor{plumtint}{HTML}{F4F0FA}
+\definecolor{plumtint2}{HTML}{EDE6F7}
+\definecolor{plumtint3}{HTML}{F6EFF4}
+\definecolor{ink}{HTML}{20131F}
+
+\AtBeginDocument{\color{ink}}
+
+% ---- boxes -----------------------------------------------------------------
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+
+\newtcolorbox{physicsbox}[1][]{
+  enhanced, breakable, sharp corners, boxrule=0pt, leftrule=2.6pt,
+  colframe=plummid, colback=plumtint2, coltitle=plummid,
+  fonttitle=\sffamily\bfseries, left=12pt, right=12pt, top=6pt, bottom=9pt,
+  before skip=9pt, after skip=9pt,
+  title={\textsc{The physics this module implements}}, #1}
+
+\newtcolorbox{decisionbox}[1][]{
+  enhanced, breakable, sharp corners, boxrule=0pt, leftrule=2.6pt,
+  colframe=plumdark, colback=plumtint, coltitle=plumdark,
+  fonttitle=\sffamily\bfseries, left=12pt, right=12pt, top=6pt, bottom=9pt,
+  before skip=9pt, after skip=9pt,
+  title={\textsc{Design decision}}, #1}
+
+\newtcolorbox{flagbox}[1][]{
+  enhanced, breakable, sharp corners, boxrule=0pt, leftrule=2.6pt,
+  colframe=plumaccent, colback=plumtint3, coltitle=plumaccent,
+  fonttitle=\sffamily\bfseries, left=12pt, right=12pt, top=6pt, bottom=9pt,
+  before skip=9pt, after skip=9pt,
+  title={\textsc{Flag --- open question / inconsistency found}}, #1}
+
+% ---- lists / headings -------------------------------------------------------
+\usepackage{enumitem}
+\setlist[itemize,1]{label={\textcolor{plummid}{\footnotesize$\blacksquare$}}, leftmargin=1.5em}
+\setlist[enumerate,1]{label={\textcolor{plummid}{\sffamily\bfseries\arabic*.}}, leftmargin=1.7em}
+
+\usepackage{titlesec}
+\titleformat{\section}
+  {\sffamily\LARGE\bfseries\color{plumdark}}{}{0pt}
+  {\textcolor{plummid}{\rule[0.12ex]{0.55em}{0.55em}}\hspace{0.6em}}
+  [\vspace{4pt}{\color{plumrule}\titlerule[1.2pt]}]
+\titleformat{\subsection}
+  {\sffamily\large\bfseries\color{plumdark}}
+  {\textcolor{plummid}{\rule[-0.18ex]{2.6pt}{1.05em}}\hspace{0.55em}\textcolor{plummid}{\thesubsection}}
+  {0.6em}{}
+\titleformat{\paragraph}[runin]{\sffamily\bfseries\color{plumdark}}{}{0pt}{}
+\titlespacing*{\paragraph}{0pt}{1.4ex plus .4ex}{0.7em}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\sffamily\color{plumdark}\nouppercase{\leftmark}}
+\fancyhead[R]{\footnotesize\sffamily\color{plummid}\thepage}
+\renewcommand{\headrule}{{\color{plumrule}\rule{\headwidth}{0.7pt}}}
+
+\usepackage[colorlinks=true, linkcolor=plumdark, citecolor=plummid,
+            urlcolor=plummid]{hyperref}
+
+% ---- code style -------------------------------------------------------------
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\file}[1]{\textcolor{plumdark}{\texttt{\small #1}}}
+
+\begin{document}
+
+% ---- title block -------------------------------------------------------------
+\begin{center}
+{\color{plummid}\rule{\textwidth}{2.4pt}}\\[2.5pt]
+{\color{plumrule}\rule{\textwidth}{0.6pt}}\\[16pt]
+{\sffamily\bfseries\color{plumdark}\Huge cubesat\_sim}\\[10pt]
+{\sffamily\Large\color{plummid} An End-to-End Instrument Simulator for the
+ CubeSat\\[3pt] Double-Fourier Spatio-Spectral Interferometer}\\[8pt]
+{\itshape\normalsize\color{ink} Architecture, physics, design decisions and
+ open questions}\\[14pt]
+{\color{plumrule}\rule{\textwidth}{0.6pt}}\\[2.5pt]
+{\color{plummid}\rule{\textwidth}{2.4pt}}\\[9pt]
+{\sffamily\small\color{plumdark!75} Savini group CubeSat interferometer
+ project \;\textcolor{plummid}{\textbullet}\; UCL \;\textcolor{plummid}{\textbullet}\; \today}
+\end{center}
+\vspace{1.0em}
+
+\begin{tcolorbox}[enhanced, breakable, sharp corners, boxrule=0pt, leftrule=2.6pt,
+  colframe=plummid, colback=plumtint2, left=13pt, right=13pt, top=8pt, bottom=9pt]
+{\sffamily\bfseries\color{plumdark}\textsc{Summary}}\par\smallskip\small\itshape
+\code{cubesat\_sim} is a Python~3 package that simulates the CubeSat
+double-Fourier interferometer end to end: a known scene is pushed through a
+software model of the instrument to produce realistic detector interferograms,
+which are then reduced back to the measured quantities and checked against the
+known input. For the confirmed single-fixed-baseline mission that quantity is
+the visibility spectrum: detection and one-axis sizing of a feature, not an
+image. A multi-baseline mode (baseline rotation and contraction) that
+reconstructs source positions and per-source spectra, and compares them with
+the input scene, is included as a future/non-mission configuration. It is a
+ground-up re-architecture of PyFIInS (the Python port of
+R.~Juanola-Parramon's FIInS simulator, FISICA project) for a two-element,
+single-baseline, warm 6U platform. The physics follows Grainger et al.\ 2012
+(arXiv:1203.2144); every instrument number is traced to a cell of
+\code{Cubesat\_interferometer\_v0.2.xlsx} or to the optical layout slides.
+Writing and validating the code surfaced six concrete design questions,
+including one genuine finding: the spreadsheet's single-sided scan budget
+cannot support complex visibility recovery at the design resolution.
+\end{tcolorbox}
+
+\tableofcontents
+\vspace{0.6em}
+\noindent{\color{plumrule}\rule{\textwidth}{0.6pt}}
+\vspace{0.4em}
+
+% ======================================================================
+\section{Purpose and philosophy}
+% ======================================================================
+
+The simulator exists to close one loop. A measurement technique is
+trustworthy only if, when handed a known input, it returns that input. The
+Grainger laboratory bench closed this loop in hardware: a lamp behind an
+aperture of known shape was measured by the interferometer and the recovered
+quantities compared with the computable truth. The FIInS simulator closed the
+same loop in software for the FISICA flagship concept. \code{cubesat\_sim}
+closes it for the CubeSat: \emph{known scene in $\rightarrow$ simulated
+detector data $\rightarrow$ recovered quantity out $\rightarrow$ compare}. For
+the confirmed single-fixed-baseline mission the recovered quantity is the
+visibility spectrum (detection and one-axis sizing of a feature, not an
+image); the future multi-baseline mode instead recovers source positions and
+per-source spectra. Where input and output match, the design works; where
+they diverge, an instrument limitation has been located and quantified.
+
+Two modes of the loop matter, and the code keeps them strictly separate:
+
+\begin{itemize}
+\item \textbf{Noiseless mode} (\code{seed=None}) validates the
+\emph{architecture}. With no noise, any input/output discrepancy is a code or
+physics error, never statistics. The shipped test suite requires the noiseless
+loop to close to numerical precision (it does: positions to
+$<10^{-3}$~arcsec, spectra to $<10^{-6}$ fractional error).
+\item \textbf{Noisy mode} estimates \emph{performance}: thermal background,
+photon noise and detector noise are injected at the radiometric model's
+levels, and the degradation of the recovered scene measures what the real
+instrument would deliver.
+\end{itemize}
+
+This separation is what makes the simulator a design tool rather than a demo:
+parameters become knobs, and the validated loop converts each knob setting
+into a science outcome.
+
+% ======================================================================
+\section{What is being modelled}
+% ======================================================================
+
+The instrument, as defined by the v0.2 radiometric spreadsheet and the
+optical layout slides: a 6U CubeSat payload carrying two 2-inch
+(\SI{50.8}{\milli\metre}) collecting telescopes, each feeding a beam-reducer
+chain into a central Michelson-type combiner; one arm of the combiner carries
+the scanning roof-mirror pair that sweeps the optical path difference (OPD);
+a single detector records one power sample per OPD step. Band
+\SIrange{8}{12}{\micro\metre} at spectral resolution $R=100$; the whole
+instrument is warm (\SI{293}{\kelvin}) --- significant because Wien's law puts
+the peak of \SI{293}{\kelvin} thermal emission at \SI{9.9}{\micro\metre},
+squarely in band, so the instrument glows at itself.
+
+Spatial information enters through the baseline $b$ between the telescopes.
+The confirmed design is a SINGLE FIXED baseline of ${\sim}\SI{0.4}{\metre}$
+(detection + one-axis sizing). The spreadsheet's \SIrange{0.3}{0.5}{\metre}
+with contraction is a future multi-baseline option, and the rigid bench is
+\SI{125}{\milli\metre} (see Flag~1); spectral information enters through the
+scanned OPD $\Delta$. In that future multi-baseline mode the uv plane is
+filled by spinning the spacecraft about the line of sight and stepping the
+baseline length between half-turns; the confirmed single-baseline instrument
+does neither. Because the
+instrument is a two-element single-baseline system, its realistic data product
+is \emph{source separation plus spectroscopy} --- the double-slit regime of
+Grainger Eqs.~11--13 --- not wide-field image synthesis. The code's science
+pipeline is built around exactly that product.
+
+\begin{decisionbox}[title={\textsc{What the code takes from the optical
+layout slides}}]
+Five facts of the model come from the layout rather than the spreadsheet:
+(i) the \SI{125}{\milli\metre} bench separation behind Flag~1; (ii) the
+roof-pair delay line, fixing mechanical travel $=\Delta/2$ (the
+``$\tfrac12\,\delta$OPD'' annotation); (iii) the single detector (+TEC);
+(iv) the asymmetric extra fold in one routing, behind the per-arm
+throughputs and the parity question; and (v) the path budgets of slides
+3--4, which \emph{balance by design}: summing the C and D rows gives
+$10{+}10{+}5{+}4 = 29$ on the right routing and
+$10{+}5{+}3{+}5{+}6{+}\delta = 29{+}\delta$ on the left --- the extra fold
+is path-length compensated and ZPD sits at the stage's nominal zero. The
+design ZPD offset is therefore zero; the \emph{residual} offset
+(manufacturing, thermal drift) is the real instrument error, carried as
+\code{FTSScan.zpd\_offset\_cm}: the forward model shifts the white-light
+fringe by it, and the reduction removes it only if told its value, so an
+uncalibrated ZPD error and its phase-ramp signature can be studied
+directly. What the layout offers but the code does not yet use: the
+specific OAP beam-reducer prescriptions (radii/focal lengths), and beam
+walk on the roof mirror during the scan.
+\end{decisionbox}
+
+\begin{decisionbox}[title={\textsc{What the code takes from the radiometric
+model}}]
+The spreadsheet is the codebase's backbone: 81 cited \code{[RM]} sheet/cell
+references across the source. Every number in \code{Band}, \code{Telescope},
+\code{ColdOptics}, \code{Detector}, \code{FTSScan}, \code{Geometry} and
+\code{Environment} traces to it; its three background loadings are
+reproduced at ratio 1.00 (test-enforced to 5\%); its uv strategy (spin
+rates, contraction, radial density) is the schedule; its data-rate sheet
+(16 bit $\times$ \SI{666.7}{\hertz}) gives the science-volume estimate;
+and its \emph{empty} rows are implemented rather than skipped --- the
+sensitivity chain (NEP$_\mathrm{tot}$, noise per channel, 5$\sigma$ MDFD),
+the parked ``visibility loss due to intensity mismatch'' term, and a
+saturation-power hook ([PH], warns when a sample clips). Two of its numbers
+are deliberately \emph{rejected}, with reasons: the photon-NEP cells
+(internally inconsistent with its own loadings, Flag~5) and the
+single-sided scan budget (cannot carry complex visibilities, Flag~4). Its
+mass/power tables (FISICA strawman leftovers), its \SI{1800}{\kelvin}
+lab-testbed source scene, and the zeroed channels B2--B4 are knowingly
+unused.
+\end{decisionbox}
+
+% ======================================================================
+\section{Package structure}
+% ======================================================================
+
+\begin{verbatim}
+cubesat_codebase/
+|-- run_simulation.py        end-to-end demo: full multi-baseline uv pass + imaging (future/non-mission)
+|-- run_cases.py             single-baseline demo: the three targets
+|-- run_crater.py            single-baseline lunar-crater detection study
+|-- requirements.txt         numpy, scipy, matplotlib, pytest
+|-- README.md                quick start + open-questions list
+|-- outputs/                 figures (full pass; outputs/cases/, crater/)
+|-- tests/
+|   |-- test_physics.py      hand-checkable physics tests (full pipeline)
+|   |-- test_singlebaseline.py  single-baseline + scene-case tests
+|   '-- test_extended.py     extended-scene loader (vs discrete limit)
+'-- cubesat_sim/
+    |-- constants.py         physical constants, Planck, unit conversions
+    |-- parameters.py        ALL instrument numbers, source-traced
+    |-- fts.py               wavenumber + OPD sampling grids
+    |-- sky.py               scene model (compact sources, spectra)
+    |-- scenes.py            three runnable target cases (the building blocks)
+    |-- extended.py          pixel-map scenes (Moon patch, crater)
+    |-- beams.py             Airy beam; parity-mismatch envelope
+    |-- uvcoverage.py        spin + contraction baseline schedule
+    |-- radiometry.py        background, photon/detector NEP, sensitivity
+    |-- forward.py           scene -> visibilities -> interferograms
+    |-- reduction.py         interferograms -> visibility spectra
+    |-- imaging.py           dirty map; positions + spectra extraction
+    |-- singlebaseline.py    one baseline: interferogram <-> spectrum
+    '-- validate.py          input-vs-recovered metrics and figures
+\end{verbatim}
+
+The data flow is a single chain; each module consumes the previous module's
+output through a small, explicit interface (a dataclass), so any stage can be
+modified or replaced without touching the others --- the modularity principle
+inherited from FIInS:
+
+\begin{center}\sffamily\small
+parameters $\rightarrow$ grids $\rightarrow$ uv schedule $\rightarrow$ scene
+$\rightarrow$ \textbf{forward} $\rightarrow$ FITS-like scan list
+$\rightarrow$ \textbf{reduction} $\rightarrow$ visibility spectra
+$\rightarrow$ \textbf{imaging} $\rightarrow$ positions + spectra
+$\rightarrow$ \textbf{validate}
+\end{center}
+
+% ======================================================================
+\section{Module by module}
+% ======================================================================
+
+% ----------------------------------------------------------------------
+\subsection{\file{constants.py} --- units and the Planck function}
+
+Defines the package conventions: wavenumber $\sigma$ in \si{\per\centi\metre}
+(so a wavenumber $\sigma$ produces a fringe $\cos(2\pi\sigma\Delta)$ with OPD
+$\Delta$ in \si{\centi\metre}, with no stray conversion factors); angles in
+radians internally, arcsec at interfaces; spectral radiance per
+\si{\per\centi\metre}. Provides the Planck function in those units,
+\begin{equation}
+B_\sigma(T) \;=\; \frac{2 h \nu^3}{c^2}\,
+\frac{1}{e^{h\nu/kT}-1}\;\cdot\;100\,c,
+\qquad \nu = 100\,c\,\sigma,
+\end{equation}
+and the Jansky conversion $1\,\mathrm{Jy} = 10^{-26}\cdot 100\,c$
+\,\si{\watt\per\square\metre} per \si{\per\centi\metre}.
+
+% ----------------------------------------------------------------------
+\subsection{\file{parameters.py} --- every number, source-traced}
+
+All instrument numbers live here, in flat dataclasses (\code{Band},
+\code{Telescope}, \code{ColdOptics}, \code{Detector}, \code{FTSScan},
+\code{Geometry}, \code{Environment}), each value carrying a comment with its
+source: \code{[RM]} sheet/cell of the radiometric spreadsheet, \code{[OPT]}
+slide of the optical layout, or \code{[PH]} placeholder. The file contains no
+physics --- only numbers and trivially derived quantities --- so that a
+parameter change can never silently alter an equation.
+
+Key traced values: $d_\mathrm{dish}=\SI{50.8}{\milli\metre}$, telescope
+efficiency $0.98^2 = 0.9801$, cold-optics throughput
+$0.98^5 \times 0.49 \times 0.98 \times 0.95 = 0.4124$ (the $0.49$ is the beam
+combiner and is included here exactly as the spreadsheet does, so it is never
+double-counted), overall optical efficiency $0.404$, detector absorption
+$0.9$, cold-optics equivalent emissivity $0.0811$, telescope equivalent
+emissivity $0.0199$.
+
+\begin{decisionbox}
+\textbf{The asymmetric extra fold mirror} ([OPT] slides 3--4: path budgets
+$10{+}10$ and $3{+}5{+}6{+}\delta$ on one routing versus $10{+}5$ and $5{+}4$
+on the other) is modelled as per-arm throughputs $t_1 = 1$,
+$t_2 = \rho^{N_\mathrm{extra}} = 0.98$. The resulting fringe-contrast loss is
+$2\sqrt{t_1 t_2}/(t_1+t_2) = 0.99995$ --- four parts in $10^5$, i.e.\
+\emph{negligible}, which is itself the quantitative answer to ``does the
+extra mirror's throughput matter?'' (No. Its parity might; see
+\file{beams.py}.) The spreadsheet keeps one symmetric throughput and lists
+``visibility loss due to intensity mismatch'' under \emph{things to add}; the
+code therefore goes one step beyond it here.
+\end{decisionbox}
+
+% ----------------------------------------------------------------------
+\subsection{\file{fts.py} --- the sampling grids}
+
+\begin{physicsbox}
+Standard FTS sampling theory (identical logic to PyFIInS \code{fts.py}).
+Channel width from the resolution requirement:
+$\delta\sigma = \sigma_c/R = \SI{10}{\per\centi\metre}$. Maximum OPD from the
+Fourier reciprocal relation: $\Delta_{\max} = 1/(2\,\delta\sigma) =
+\SI{0.05}{\centi\metre}$. OPD step from Nyquist at the band top, with the
+spreadsheet's $\times 2$ oversampling: $\delta\Delta =
+1/(2\sigma_{\max}\cdot 2) = \SI{2}{\micro\metre}$. These reproduce
+[RM]~Inst~Spectral E43/E50/E53/E54 exactly: 250 samples and \SI{0.375}{\second}
+per single-sided scan. (The DEFAULT implementation is double-sided ---
+500 samples, \SI{0.75}{\second} --- for complex-visibility recovery; see the
+flag below.) The roof-mirror stage moves half the OPD
+(mechanical travel $=\Delta/2$, [RM]~E51) --- \emph{not} the $\Delta/4$ of
+FIInS's cat's-eye design, a heritage trap explicitly commented in the code.
+\end{physicsbox}
+
+The sky is simulated on the \emph{natural} FTS grid
+$\sigma_k = k\,\delta\sigma$ (42 channels in band), so a noiseless
+interferogram transforms back to the input spectrum with zero interpolation
+error --- gridding artefacts can never masquerade as physics in the validation
+loop.
+
+\begin{flagbox}
+\textbf{Finding (the most important one): the scan must be double-sided.}
+The spreadsheet budgets a single-sided scan ($\Delta = 0 \to \Delta_{\max}$,
+250 samples). That achieves $R=100$ only for a \emph{real} spectrum --- the
+implicit assumption of conventional FTS, where the source contributes no
+phase. A double-Fourier interferometer measures \emph{complex} visibilities:
+the fringe phase carries the source positions, and is precisely the science.
+Information counting: 250 real samples cannot determine 42 channels
+$\times$ 2 quadratures of independent complex visibility plus the DC level
+--- over a one-sided window the cosine and sine components of neighbouring
+channels are nearly degenerate. The simulator demonstrated this numerically:
+with the single-sided scan, noiseless visibility recovery fails at the
+10--100\% level at many uv points; with the symmetric scan
+($-\Delta_{\max} \to +\Delta_{\max}$, 500 samples, \SI{0.75}{\second}),
+recovery is exact to $2\times 10^{-12}$. Consequence: the per-uv-point dwell
+time doubles (full uv pass $\sim$\SI{54}{\second} at the spreadsheet's spin
+strategy), or resolution halves to $R=50$. This is a real scan-budget
+correction to take back to the design.
+\end{flagbox}
+
+% ----------------------------------------------------------------------
+\subsection{\file{sky.py} --- the scene}
+
+A scene is a list of compact sources; each source has a position, an angular
+size, and a spectrum (blackbody continuum normalised to a flux density in Jy
+at a reference wavelength, plus an optional Gaussian emission line for
+validating the spectroscopy axis).
+
+\begin{decisionbox}
+\textbf{Discrete sources instead of a pixel cube.} PyFIInS generated an
+$n_\mathrm{pix}\times n_\mathrm{pix}\times n_\sigma$ sky cube and extracted
+visibilities by FFT. For a two-element instrument doing source separation,
+the van Cittert--Zernike integral collapses to a finite sum over sources
+(next subsection) which is evaluated \emph{exactly} --- faster, and free of
+pixelisation error. The interface (\code{visibility(uv, sigma)}) is
+unchanged, so a pixel-grid scene loader for extended emission can be added
+later without touching the rest of the pipeline.
+\end{decisionbox}
+
+The convenience constructor \code{binary\_scene()} builds the canonical test:
+an unequal binary (default $5\times10^4$ and $2\times10^4$~Jy, separation
+8~arcsec) with an emission line on the fainter component --- the double-slit
+configuration of Grainger Eqs.~11--13, with the line testing that spectra are
+recovered \emph{per source}, which is the entire point of double-Fourier.
+
+% ----------------------------------------------------------------------
+\subsection{\file{beams.py} --- the Airy beam and the parity envelope}
+
+\begin{physicsbox}
+Each collector is a uniformly illuminated circular aperture, so its
+amplitude beam is the jinc pattern $b(\theta) = 2J_1(x)/x$ with
+$x = \pi D \sin\theta/\lambda$, first null at $1.22\lambda/D$
+($\approx 50$~arcsec at \SI{10}{\micro\metre}) --- PyFIInS's `Perfect' beam
+option; GRASP/measured beams can be slotted in behind the same interface.
+
+\textbf{Parity-mismatch envelope (new calculation).} If the two arms have
+opposite reflection parity, arm~2 delivers a mirror-flipped image: a source
+at $+\theta_x$ in arm~1 arrives where $-\theta_x$ arrives in arm~2, so the
+two single-arm PSFs for the same sky point are displaced by $2\theta_x$ and
+the fringe contrast is their overlap. By Parseval, the overlap of two
+displaced PSFs is the Fourier transform of the pupil intensity (a uniform
+disc) at displacement $2\theta_x$:
+\begin{equation}
+\mu(\theta_x) = \frac{2J_1(z)}{z}, \qquad
+z = \frac{2\pi D\,\theta_x}{\lambda},
+\end{equation}
+unity on axis and zero at $\theta_x = 0.61\lambda/D$ --- \emph{half} the Airy
+radius. A parity mismatch therefore halves the usable field of view in the
+flip direction while costing nothing on axis. The envelope multiplies the
+visibility integrand when \code{parity\_mismatch=True}, making the
+field-of-view penalty directly simulatable --- the quantitative version of
+the extra-mirror question.
+\end{physicsbox}
+
+% ----------------------------------------------------------------------
+\subsection{\file{uvcoverage.py} --- the baseline schedule}
+
+Implements the spreadsheet's uv strategy ([RM]~Spacecraft rows 22--31):
+spin rate $\omega(b) = (d/2)/(t_\mathrm{scan}\,b/2)$, i.e.\ one interferogram
+scan per dish-diameter of arc motion, which makes the angular step between uv
+samples $\delta\phi = d/b$ --- exactly the uv-plane Nyquist criterion (adjacent
+samples separated by one aperture diameter). One half-circle per baseline
+length suffices because the sky is real ($V(-\mathbf u) = V^*(\mathbf u)$);
+the baseline is then stepped by $2d$ ([RM]'s choice: each dish moves one
+diameter per half-turn; this undersamples radially by $2\times$ relative to
+Nyquist --- flagged, parameterised). The frozen-baseline approximation
+(baseline fixed during each scan) is consistent with the design's own
+smearing tolerance; intra-scan fringe smearing is a documented missing
+systematic.
+
+% ----------------------------------------------------------------------
+\subsection{\file{radiometry.py} --- background, noise, sensitivity}
+
+\begin{physicsbox}
+Each warm emitter contributes
+$P = \int \epsilon_\mathrm{eq}(\sigma)\, B_\sigma(T)\, A\Omega(\sigma)\,
+\eta_\mathrm{downstream}\, \eta_\mathrm{det}\, d\sigma$; the photon NEP is
+the Poisson expression $\mathrm{NEP}^2 = \int 2 E_\mathrm{ph}\,
+P_\mathrm{abs,\sigma}\, d\sigma$ (Bose excess $<1\%$ at
+$h\nu/kT \approx 6$); total NEP adds the detector dark NEP in quadrature;
+the rms noise on one OPD sample of duration $t_s$ is
+$\mathrm{NEP}\sqrt{1/(2t_s)}$. The module reproduces the spreadsheet's
+three background loadings to ratio $1.00$ (environment
+\SI{5.38e-9}{\watt}, telescope \SI{2.52e-10}{\watt}, cold optics
+\SI{1.02e-9}{\watt}), which validates the emissivity chain end to end.
+\end{physicsbox}
+
+\begin{flagbox}
+\textbf{The spreadsheet's photon-NEP rows are internally inconsistent with
+its own loadings.} Applying $\mathrm{NEP}=\sqrt{2PE_\mathrm{ph}}$ to its SUN
+loading (\SI{5.4e-9}{\watt}) gives $\sim$\SI{5e-15}{\watt\per\sqrt{\hertz}},
+yet its NEP cell says \SI{6.5e-17}{} --- a factor $\sim$100, i.e.\ a factor
+$10^4$ in power, exactly the $\mathrm{cm}^2/\mathrm{m}^2$ ratio. The
+`Wavelengths' sheet that feeds those cells carries flux in
+$[\,1/\mathrm{cm}^2/\mathrm{sr}\,]$ units against etendue in
+$\mathrm{m}^2\,\mathrm{sr}$. Our first-principles photon NEP is
+\SI{1.1e-14}{\watt\per\sqrt{\hertz}}, not \SI{9.2e-17}{}. To check with GS;
+the spreadsheet's own loading rows (which we reproduce exactly) support the
+larger number.
+\end{flagbox}
+
+\begin{flagbox}
+\textbf{Detector NEP is the single most important missing number.} The
+spreadsheet's NEP(Dark) cells are empty. The placeholder
+(\SI{5e-14}{\watt\per\sqrt{\hertz}}, a representative TEC-cooled mid-IR
+photodetector, $D^*\!\sim\!10^{11}$\,cm\,$\sqrt{\mathrm{Hz}}$/W, 50-\si{\micro\metre}
+pixel) makes the system \emph{detector-noise limited} ($\sim$5$\times$ above
+even our corrected photon NEP, $\sim$500$\times$ above the spreadsheet's
+figure). At that noise the 5$\sigma$ per-channel sensitivity is
+$\sim 9\times10^3$~Jy per full uv pass (worst band): only the very brightest mid-IR
+sources (Betelgeuse-class and brighter) are accessible. A cryogenic detector
+(NEP $\sim 10^{-16}$) changes the conclusion completely. This is the gate
+question for the noise budget.
+\end{flagbox}
+
+% ----------------------------------------------------------------------
+\subsection{\file{forward.py} --- the double-Fourier forward model}
+
+\begin{physicsbox}
+The detector power at OPD $\Delta$ and baseline $\mathbf b$ is the
+double-Fourier measurement equation (Grainger Eq.~15, per channel):
+\begin{equation}
+P(\Delta) = \sum_\sigma \delta\sigma\, A\,\eta(\sigma)\!\left[
+\tfrac{t_1+t_2}{2}\,S_0(\sigma) + \sqrt{t_1 t_2}\,
+\mathrm{Re}\!\left\{V(\sigma)\, e^{\,2\pi i \sigma\Delta}\right\}\right]
++ P_\mathrm{bg},
+\end{equation}
+with the visibility given by the van Cittert--Zernike sum over the discrete
+sources,
+\begin{equation}
+V(\sigma) = \sum_k S_k(\sigma)\, b^2(\theta_k,\sigma)\,
+\mu(\theta_{k,x})\, \tau_k(\sigma,b)\,
+e^{-2\pi i \sigma\,(\mathbf b\cdot\boldsymbol\theta_k)},
+\end{equation}
+where $b^2$ is the two-collector beam product, $\mu$ the parity envelope,
+$\tau_k$ a Gaussian resolved-size taper, and the DC term $S_0$ uses the
+intensity beam. The two Fourier kernels --- spatial
+$e^{-2\pi i\sigma\,\mathbf b\cdot\boldsymbol\theta}$ and spectral
+$e^{2\pi i\sigma\Delta}$ --- share the same $\sigma$ inside one expression:
+that is, literally, the ``double Fourier''.
+
+The detector's \SI{500}{\micro\second} time constant low-pass filters the
+fringes: during a scan, channel $\sigma$ appears at temporal frequency
+$f = \sigma\,\dot\Delta$ (each colour becomes its own audio tone) and is
+attenuated by the single-pole MTF $1/\sqrt{1+(2\pi f\tau)^2}$ ---
+0.88--0.97 across the band at the design scan speed. Included in the forward
+model; divided back out in reduction as a known calibration.
+\end{physicsbox}
+
+Noise is injected per sample at the radiometric level; \code{seed=None}
+disables it for architecture validation. Pointing jitter has an explicit
+hook but no model yet --- PyFIInS used measured \emph{Herschel} jitter
+spectra, which have no relevance to a reaction-wheel CubeSat; a CubeSat ADCS
+jitter spectrum is a placeholder input.
+
+% ----------------------------------------------------------------------
+\subsection{\file{reduction.py} --- interferogram to visibility spectrum}
+
+The first of the two inverse Fourier transforms.
+
+\begin{decisionbox}
+\textbf{Least squares instead of FFT.} PyFIInS circularly shifted each
+interferogram so zero OPD sat at index 0, then FFT'd (with a code comment
+``must ask David N how to do this properly''). Here the OPD axis is known
+exactly, so each scan is solved in one step as a linear model
+\begin{equation}
+P(\Delta_j) = c_0 + \sum_k \big[a_k \cos(2\pi\sigma_k\Delta_j)
+ + b_k \sin(2\pi\sigma_k\Delta_j)\big],
+\qquad \hat V_k = \frac{a_k - i\,b_k}{g_k},
+\end{equation}
+with the known gain $g_k$ (area $\times$ efficiency $\times$
+$\sqrt{t_1t_2}$ $\times$ $\delta\sigma$ $\times$ detector MTF) divided out so
+$\hat V$ returns in physical flux-density units. Advantages over the FFT
+route: no zero-OPD shifting or phase-correction step at all; the constant
+term (DC + background) is fitted simultaneously rather than subtracted (a
+mean-subtraction biases channels whose cosines have a half-integer number of
+cycles in the window); and the method generalises unchanged to irregular OPD
+sampling when delay-line velocity errors are added later. Cost: one
+$500\times 85$ \code{lstsq} per scan --- negligible.
+\end{decisionbox}
+
+% ----------------------------------------------------------------------
+\subsection{\file{imaging.py} --- the second transform and source separation}
+
+Two products. First, the \textbf{dirty map} (diagnostic only):
+$I_d(\boldsymbol\theta) = \langle \mathrm{Re}\{\hat V\,
+e^{+2\pi i\sigma\,\mathbf b\cdot\boldsymbol\theta}\}\rangle_{\mathrm{uv},\sigma}$,
+plus the matching dirty beam. With $\sim$50--100 uv points on 2--3 rings the
+dirty beam has strong sidelobes; the map serves to find starting positions,
+not to do photometry. (Hogbom CLEAN, which PyFIInS carried but had commented
+out of its own pipeline, is deliberately omitted: for a few-source scene,
+parametric fitting is simpler and statistically better.)
+
+Second, the \textbf{science pipeline} --- source separation + spectroscopy:
+\begin{enumerate}
+\item initial positions from the band-averaged dirty map peaks (grid search
+with parabolic sub-pixel refinement);
+\item position refinement by separable least squares (variable projection):
+at fixed positions the per-channel model
+$V(u,v) = \sum_k S_k\, e^{-2\pi i\sigma\,\mathbf b\cdot\boldsymbol\theta_k}$
+is \emph{linear} in the $S_k$, so the best-fit fluxes and residual are cheap;
+Nelder--Mead then minimises over the $2n_\mathrm{src}$ position coordinates.
+Dirty-map peaks alone are accurate to a fraction of a pixel, which leaks
+phase errors into the spectra ($\sim$8\% at 0.3~arcsec); the refinement
+closes the noiseless loop to machine precision;
+\item per-channel linear solve at the refined positions, then division by
+the known primary beam (and parity envelope) at each position. This inverts
+the double-slit cosine of Grainger Eqs.~11--13 for amplitude \emph{and}
+phase, rather than just fitting its period.
+\end{enumerate}
+
+% ----------------------------------------------------------------------
+\subsection{\file{validate.py} and \file{run\_simulation.py}}
+
+\code{validate} computes the loop metrics (position errors in arcsec;
+fractional rms between recovered and true spectra, matched source by source)
+and writes the diagnostic figures: uv coverage, noiseless and noisy
+interferograms (the white-light fringe at $\Delta=0$ is clearly visible),
+dirty map + dirty beam with true and recovered positions overplotted, and
+the input-vs-recovered spectra. \code{run\_simulation.py} chains everything
+and prints the radiometric cross-check against the spreadsheet, the
+sensitivity summary, and the metrics for both the noiseless and noisy runs.
+
+% ======================================================================
+\section{Results of the reference run}
+% ======================================================================
+
+This reference run exercises the \emph{future} multi-baseline
+rotation+contraction pipeline, not the confirmed mission: the confirmed
+single-baseline design (single fixed ${\sim}\SI{0.4}{\metre}$, delay-line
+scan only, no uv rotation or contraction) is characterised in the
+\file{run\_crater.py} worked example below.
+
+Default parameters; unequal binary ($5\times10^4$ / $2\times10^4$~Jy,
+8~arcsec separation, PA $30^\circ$, emission line on the fainter source);
+72 uv points on 3 baseline rings (0.5, 0.398, \SI{0.3}{\metre}),
+\SI{54}{\second} of observation; 5$\sigma$ per-channel sensitivity
+$9\times10^3$~Jy for the full pass, worst band (after the combiner-gain and detector-MTF fixes).
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Quantity} & \textbf{Noiseless} & \textbf{Noisy (placeholder NEP)}\\
+\midrule
+position error, source A & $<0.001''$ & $0.06''$\\
+position error, source B & $<0.001''$ & $0.10''$\\
+spectrum rms, source A & $<10^{-6}$ & 8.6\%\\
+spectrum rms, source B & $<10^{-6}$ & 17.5\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The noiseless loop closing exactly is the architecture validation. The noisy
+numbers say something real: even at $5\times10^4$~Jy (brightest-star
+territory) the per-channel SNR with a TEC-class detector is modest --- the
+detector NEP question (Flag~2) is where the science capability will be
+decided.
+
+% ======================================================================
+\section{Single-baseline analysis and the three target cases}
+% ======================================================================
+
+The full pipeline above rotates the baseline to fill the uv plane. But the
+\emph{building block} of the whole technique is what happens at ONE baseline:
+hold the telescopes fixed, scan the delay line once, and look at what comes
+out. This is the right level at which to choose a science target and ask
+``can we make out the feature?'', and it is implemented separately in
+\file{singlebaseline.py} with three ready-to-run targets in \file{scenes.py}
+(\code{python run\_cases.py [name]}). The cases are independent --- pick one
+by name and run it without touching the others.
+
+\begin{physicsbox}[title={\textsc{Peak, ripples, convolution: the FTS picture
+at one baseline}}]
+A single delay-line scan produces an \textbf{interferogram} --- detector power
+vs OPD: a central PEAK (the white-light fringe, where every colour adds in
+phase at zero OPD) with FRINGES/RIPPLES around it. The ripples are the
+source's spectrum and spatial structure imprinted on the delay axis.
+Fourier-transforming the interferogram recovers the spectrum (the
+``peak''). But the scan is \emph{finite} (length OPD$_{\max}$), which is the
+same as multiplying the true interferogram by a boxcar window --- and a
+boxcar in OPD is a SINC in wavenumber. So every true spectral peak comes back
+\textbf{convolved with a sinc that has ripples (sidelobes at $\sim$13\%)}:
+the instrument line shape. That is the ``ripples in the convolution''. The
+ratio (scan length)/(feature scale) sets how many ripples and how sharp the
+recovered peak is --- the ``10\,m feature, 100\,m measuring scale'' picture,
+on whichever axis (a longer scan resolves a narrower line; a longer baseline
+resolves a smaller angle). \textbf{Apodization} (tapering the window, here
+Hann) trades the ripples for a broader peak; both curves are shown.
+\end{physicsbox}
+
+To make the line-shape ripples visible at all, the source is simulated on a
+spectral grid finer than the FTS channels (\code{Case.spectral\_oversample})
+and the band edge is given a smooth roll-off (the real band-defining filter,
+\code{singlebaseline.band\_filter}) instead of a razor edge that would ring
+spuriously. This deliberately exercises the one class of FTS systematics that
+the on-channel-grid validation loop cannot (it was noted there as a
+structural blind spot).
+
+\paragraph{The three cases (each a candidate target and a physics regime).}
+
+\begin{center}\small
+\begin{tabular}{@{}p{2.6cm}p{4.6cm}p{5.6cm}@{}}
+\toprule
+\textbf{Case} & \textbf{Candidate target} & \textbf{What the single baseline shows}\\
+\midrule
+\code{compact\_line} & a star, or an atmospheric gas line (an unresolved
+point with a spectral feature) & the SPECTRAL axis: the line is recovered at
+1003~cm$^{-1}$ as a sinc (the instrument line shape) with ripples;
+apodization smooths them. Visibility is flat (unresolved).\\[4pt]
+\code{binary} & two craters, a binary star, two thermal hotspots & SOURCE
+SEPARATION: the 24$''$ separation imprints a cosine RIPPLE across the
+spectrum ($\sim$2 cycles), period $1/(b\,\theta_{\rm sep})$; reading it gives
+the separation. This is the double-slit result on one baseline.\\[4pt]
+\code{resolved\_disk} & a planetary/lunar disk or limb, a wide thermal
+region & RESOLUTION: the visibility falls ($0.56\!\to\!0.27$ across the band),
+more at bluer wavenumbers --- the source is resolved out, and the recovered
+spectrum is tilted/suppressed accordingly.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Each case writes a three-panel figure (interferogram / recovered spectrum vs
+truth / visibility) to \code{outputs/cases/}. Together they answer the
+professor's question directly: \code{compact\_line} shows whether a spectral
+feature survives the line shape; \code{binary} whether two features are
+separable and how far apart; \code{resolved\_disk} whether an extended target
+is resolved and at which colours.
+
+\begin{flagbox}[title={\textsc{What one baseline cannot do}}]
+At a single baseline the recovered spectrum is $S(\sigma)\,V(\sigma)$ --- the
+true spectrum times the spatial visibility at that one baseline --- and the
+two CANNOT be separated from one baseline alone. A cosine ripple across the
+band (the \code{binary} case) could equally be a genuine spectral modulation;
+a tilt (\code{resolved\_disk}) could be a redder source. Disentangling
+spatial from spectral is exactly what baseline diversity --- the full uv
+rotation of the main pipeline --- is for. The single-baseline analysis is the
+per-baseline building block; the full pipeline stacks many of them, and only
+then can position and per-source spectrum be told apart (the
+``$<10^{-6}$ noiseless'' result of the previous section).
+\end{flagbox}
+
+% ======================================================================
+\section{Worked example: single-baseline lunar-crater detection}
+% ======================================================================
+
+The CONFIRMED instrument as scoped (GS, June 2026) is a \emph{single fixed
+baseline, one axis, no baseline movement} (the delay line still scans for the
+spectrum; only the baseline vector is held). That rules out imaging --- there
+is no uv coverage to fill --- but it supports \emph{detection and one-axis
+sizing}, the regime of the ship-on-sea example. (The multi-baseline
+rotation+contraction pipeline in \code{run\_simulation.py} can image, but is a
+future/non-mission configuration, not the confirmed design.) This section runs that case for a lunar crater
+and uses it as the evidence for the rigid-bench-vs-boom decision (open
+question~1).
+
+\subsection{\file{extended.py} --- pixel-map scenes}
+
+\begin{decisionbox}
+A crater on the Moon is an \emph{extended brightness map}, not a few compact
+sources, so \file{extended.py} adds a new scene type: a temperature map
+$T(x,y)$ on an angular grid, each pixel a blackbody. Its visibility is the
+van Cittert--Zernike sum over pixels,
+\[
+V(\sigma) = \sum_{\mathrm{pix}} \epsilon\, B_\sigma(T_{\mathrm{pix}})\,
+b^2(\theta_{\mathrm{pix}})\,\mu(\theta_{\mathrm{pix}})\,
+e^{-2\pi i\sigma(\mathbf b\cdot\boldsymbol\theta_{\mathrm{pix}})}\,\mathrm{d}\Omega,
+\]
+the same sum \file{forward.py} uses, with sources replaced by pixels of solid
+angle $\mathrm{d}\Omega$. To keep one source of truth, the interferogram
+formula (gains, MTF, ZPD, noise, saturation) was refactored into a single
+shared function, \code{forward.interferogram\_from\_visibility}, that both
+the discrete and extended paths call --- so any combiner-normalisation fix
+(the combiner factor-of-2, now fixed in \code{forward.fringe\_gain})
+propagates to both. The loader is verified
+against the discrete forward model in the point-source limit (a single hot
+pixel returns $|V|/S_0 = 1$ with the exact geometric phase ramp), and the
+noiseless interferogram round-trips to the analytic visibility at $10^{-6}$.
+\end{decisionbox}
+
+\subsection{The detection physics}
+
+\begin{physicsbox}
+A uniform surface patch filling the beam washes the fringes out: its power
+sits in the un-fringing DC term and $V\to0$. A crater breaks that uniformity,
+lifting $|V|$ above the uniform-patch floor --- that lift, relative to the
+radiometric noise, \emph{is} the detection. The crater's diameter along the
+baseline is read from the \emph{shape} of $|V|(\sigma)$: because $u=b/\lambda$
+sweeps a radial line across the band, one fixed baseline samples part of the
+visibility's sinc fall-off. The fixed baseline is therefore a matched filter
+--- a crater near $\lambda/b$ gives the strongest, most size-diagnostic
+signal; one far smaller is unresolved (a small flat $V$); one filling the
+beam washes out again.
+\end{physicsbox}
+
+\subsection{Result --- the baseline decision}
+
+A \SI{30}{\kilo\metre} crater (cool floor) in a uniform sunlit patch, observed
+at three fixed baselines (\code{run\_crater.py}). The single-dish field of
+view is $\sim50''\approx\SI{92}{\kilo\metre}$ at the Moon. Because the Moon is
+extremely bright, every case is detected with SNR $\gg5$ (after the combiner
+fix, $\sim$20--400) --- the study is \emph{resolution}-limited, not
+noise-limited, so the detector-NEP placeholder does not change the
+conclusion (and the combiner normalisation, now corrected, only rescales the
+absolute flux). The differentiator is \emph{sizing}, which needs the crater
+larger than the resolution element:
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Baseline} & \textbf{Resolution} & \textbf{Can size\ldots}\\
+\midrule
+\SI{0.125}{\metre} (rigid bench) & $20''$ ($\sim$\SI{37}{\kilo\metre}) &
+only $\sim$\SI{90}{\kilo\metre} (Copernicus-class); 10--30 km detected, not sized\\
+\SI{0.25}{\metre} & $10''$ ($\sim$\SI{19}{\kilo\metre}) & $\sim$\SI{30}{\kilo\metre} and up\\
+\SI{0.5}{\metre} (boom) & $5''$ ($\sim$\SI{9}{\kilo\metre}) & down to $\sim$\SI{10}{\kilo\metre}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+So the rigid-vs-boom choice reduces to a science question: \emph{do we need to
+measure crater sizes (boom), or only detect that structure is present (the
+rigid bench suffices)?} A nuance the figures show: the rigid bench gives a
+\emph{stronger} detection signal ($|V|/S_0\approx0.025$ vs $0.005$ at
+\SI{0.5}{\metre}), because a longer baseline resolves --- and so washes out
+--- more of the crater. Short baseline: higher contrast, coarse sizing; long
+baseline: finer sizing, lower contrast (still trivially detected here).
+
+Caveat: the crater is modelled as a uniform cool disk (\SI{390}{\kelvin}
+surface, \SI{250}{\kelvin} floor); a real crater has rim/floor/central-peak
+structure. The technique detects any departure from uniformity, so the
+conclusion holds, but the exact signature would differ. Figures live in
+\code{outputs/crater/} (the patches, the $|V|(\sigma)$ signature per baseline,
+and the SNR-vs-size-vs-baseline grid).
+
+% ======================================================================
+\section{All flags and open questions, collected}
+% ======================================================================
+
+\begin{enumerate}
+\item \textbf{Baseline geometry (RESOLVED).} The confirmed design is a
+SINGLE FIXED baseline of ${\sim}\SI{0.4}{\metre}$ (detection + one-axis
+sizing, not imaging). The spreadsheet's \SIrange{0.3}{0.5}{\metre} with
+contraction (deployable boom / formation flight + contraction mechanism)
+is a future multi-baseline option; the \SI{125}{\milli\metre} rigid bench is
+the detection-only alternative. Angular resolution spans $4\times$
+($\lambda/b$ at \SI{10}{\micro\metre}: $16.5''$ at \SI{0.125}{\metre} vs
+$4.1''$ at \SI{0.5}{\metre}). The \code{Geometry} defaults keep the
+spreadsheet \SIrange{0.3}{0.5}{\metre} only for the legacy
+\code{uvcoverage.py} schedule; set
+\code{baseline\_min\_m = baseline\_max\_m} to a single value (0.4 design,
+0.125 rigid bench) for single-baseline runs.
+\item \textbf{Detector NEP} ([PH], the gate number): empty in the
+spreadsheet; placeholder \SI{5e-14}{\watt\per\sqrt{\hertz}} makes the system
+detector-noise limited and sets the $\sim 9\times10^3$~Jy sensitivity floor.
+\item \textbf{Arm parity}: matched or mismatched handedness after the extra
+fold? Mismatch halves the usable field ($\mu$ envelope); throughput effect
+is negligible ($4\times10^{-5}$). Needs a reflection count per arm from the
+optical prescription.
+\item \textbf{Scan budget (RESOLVED: double-sided is the default).}
+Single-sided scanning cannot recover complex visibilities at $R=100$; the
+default is therefore double-sided, doubling the dwell time
+(\SI{0.75}{\second}/scan) --- found numerically, see \file{fts.py} flag.
+\item \textbf{Spreadsheet photon-NEP inconsistency}: loadings and NEPs
+disagree by $\sim 100\times$ (suspected cm$^2$/m$^2$ slip); our
+first-principles value is \SI{1.1e-14}{\watt\per\sqrt{\hertz}}.
+\item \textbf{Stale labels in the spreadsheet}: the pixel-FoV / etendue
+cells are labelled ``@ 8\,\si{\micro\metre}'' but their cached values
+correspond to \SI{10}{\micro\metre}; the band itself (8--12~\si{\micro\metre},
+mid-IR rather than far-IR) is worth confirming as intentional. The
+spreadsheet's source is currently an \SI{1800}{\kelvin} lab circuit against
+a \SI{293}{\kelvin} scene (testbed configuration), and its mass/power tables
+are inherited from the FISICA strawman (1.6~m telescopes, 14~m booms) ---
+neither describes the CubeSat.
+\end{enumerate}
+
+% ======================================================================
+\section{What is deliberately not modelled (yet)}
+% ======================================================================
+
+Kept out to stay at the right level of sophistication, each with its natural
+insertion point:
+
+\begin{itemize}
+\item \textbf{Pointing jitter} --- hook in \code{observe\_scan}; needs a
+CubeSat ADCS (reaction-wheel) jitter spectrum, not the Herschel spectra
+PyFIInS used.
+\item \textbf{Delay-line velocity errors} --- enter as an irregular OPD
+axis; the least-squares reduction already accepts arbitrary OPD sampling.
+\item \textbf{Intra-scan baseline rotation (fringe smearing)} --- bounded by
+the design's own spin criterion; a smearing factor per channel would slot
+into \code{forward.detector\_mtf}'s position in the chain.
+\item \textbf{Extended emission} --- a pixel-grid scene class behind the
+same \code{visibility()} interface. Related, verified numerically: the
+point-source extractor under-reports a \emph{resolved} source's flux by
+the uv-averaged size taper (a 3-arcsec FWHM source on the default
+baselines returns $0.26\times$ its true flux); fitting a size parameter
+per source is the upgrade path. Channels where the beam/parity
+correction would divide by $\sim$zero are returned as NaN rather than
+fabricated.
+\item \textbf{Measured beams} --- GRASP import behind
+\code{beams.amplitude\_beam}.
+\item \textbf{Thermal drift of the ZPD} --- the static residual offset is
+now modelled (\code{FTSScan.zpd\_offset\_cm}); its slow per-scan \emph{drift}
+is not, and would enter as a time-dependent offset in the same place.
+\item \textbf{Beam walk on the roof mirror} --- the \SI{0.5}{inch}
+collimated beam translates across the moving roof pair during a scan,
+modulating coupling and adding a scan-position-dependent throughput; needs
+the OAP prescription from the layout to quantify.
+\item \textbf{Detector nonlinearity and clipping} --- the saturation hook
+warns when a sample exceeds \code{saturation\_power\_w} ([PH]) but the
+response is otherwise perfectly linear; a measured response curve would
+slot in where the warning fires.
+\end{itemize}
+
+% ======================================================================
+\section{Relation to the PyFIInS heritage}
+% ======================================================================
+
+\begin{center}\small
+\begin{tabular}{@{}p{4.2cm}p{4.4cm}p{4.6cm}@{}}
+\toprule
+\textbf{Function} & \textbf{PyFIInS (FISICA)} & \textbf{cubesat\_sim}\\
+\midrule
+language & Python 2, Parallel Python & Python 3, numpy/scipy only\\
+parameters & Excel workbooks parsed at runtime & source-traced dataclasses\\
+sky & pixel cube + FFT & exact discrete-source VCZ sum\\
+uv coverage & boom spirals (const-$L$, spiro) & spin + contraction rings\\
+scan & double-sided, $\Delta/4$ cat's-eye & double-sided, $\Delta/2$ roof pair\\
+errors & Herschel jitter spectra & radiometric noise; CubeSat jitter [PH]\\
+spectra from IGs & shift + FFT & explicit-OPD least squares\\
+image product & dirty cube (+ unused CLEAN) & dirty map + parametric
+source separation\\
+noise model & none in forward chain & background + photon + detector NEP\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The thesis-Chapter-4 module map survives intact --- sky, beams, uv,
+FTS, observe, reduce, image, validate --- which is deliberate: anyone who
+knows FIInS can navigate this code immediately, and anything learned here
+maps back onto the heritage architecture.
+
+\end{document}
